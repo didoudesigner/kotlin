@@ -151,13 +151,10 @@ class KotlinCoreEnvironment private constructor(
     private val classpathRootsResolver: ClasspathRootsResolver
     private val initialRoots: List<JavaRoot>
 
-    val configuration: CompilerConfiguration = configuration.copy()
+    val configuration: CompilerConfiguration = configuration.setupJdkClasspathRoots(configFiles).copy()
 
     init {
         PersistentFSConstants.setMaxIntellisenseFileSize(FileUtilRt.LARGE_FOR_CONTENT_LOADING)
-
-        val messageCollector = configuration.get(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
-        setupJdkClasspathRoots(messageCollector, configFiles)
 
         val project = projectEnvironment.project
 
@@ -180,6 +177,7 @@ class KotlinCoreEnvironment private constructor(
 
         registerProjectServicesForCLI(projectEnvironment)
 
+        val messageCollector = configuration.get(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
         registerProjectServices(projectEnvironment, messageCollector)
 
         sourceFiles += CompileEnvironmentUtil.getKtFiles(project, getSourceRootsCheckingForDuplicates(), this.configuration, {
@@ -254,31 +252,6 @@ class KotlinCoreEnvironment private constructor(
         project.putUserData(APPEND_JAVA_SOURCE_ROOTS_HANDLER_KEY, fun(roots: List<File>) {
             updateClasspath(roots.map { JavaSourceRoot(it, null) })
         })
-    }
-
-    private fun setupJdkClasspathRoots(messageCollector: MessageCollector?, configFiles: EnvironmentConfigFiles) {
-        if (configuration.getBoolean(JVMConfigurationKeys.NO_JDK)) return
-
-        val jvmTarget = configFiles == EnvironmentConfigFiles.JVM_CONFIG_FILES
-        if (!jvmTarget) return
-
-        val jdkHome = configuration.get(JVMConfigurationKeys.JDK_HOME)
-        val (javaRoot, classesRoots) = if (jdkHome == null) {
-            val javaHome = PathUtil.getJavaHome()
-            configuration.put(JVMConfigurationKeys.JDK_HOME, javaHome)
-
-            javaHome to PathUtil.getJdkClassesRootsFromCurrentJre()
-        }
-        else {
-            jdkHome to PathUtil.getJdkClassesRoots(jdkHome)
-        }
-
-        if (!CoreJrtFileSystem.isModularJdk(javaRoot)) {
-            configuration.addJvmClasspathRoots(classesRoots)
-            if (classesRoots.isEmpty()) {
-                messageCollector?.report(ERROR, "No class roots are found in the JDK path: $jdkHome")
-            }
-        }
     }
 
     fun createPackagePartProvider(scope: GlobalSearchScope): JvmPackagePartProvider {
@@ -574,5 +547,34 @@ class KotlinCoreEnvironment private constructor(
              */
 
         }
+
+        private fun CompilerConfiguration.setupJdkClasspathRoots(configFiles: EnvironmentConfigFiles): CompilerConfiguration {
+            if (getBoolean(JVMConfigurationKeys.NO_JDK)) return this
+
+            val jvmTarget = configFiles == EnvironmentConfigFiles.JVM_CONFIG_FILES
+            if (!jvmTarget) return this
+
+            val jdkHome = get(JVMConfigurationKeys.JDK_HOME)
+            val (javaRoot, classesRoots) = if (jdkHome == null) {
+                val javaHome = PathUtil.getJavaHome()
+                put(JVMConfigurationKeys.JDK_HOME, javaHome)
+
+                javaHome to PathUtil.getJdkClassesRootsFromCurrentJre()
+            }
+            else {
+                jdkHome to PathUtil.getJdkClassesRoots(jdkHome)
+            }
+
+            if (!CoreJrtFileSystem.isModularJdk(javaRoot)) {
+                addJvmClasspathRoots(classesRoots)
+                if (classesRoots.isEmpty()) {
+                    val messageCollector = get(CLIConfigurationKeys.MESSAGE_COLLECTOR_KEY)
+                    messageCollector?.report(ERROR, "No class roots are found in the JDK path: $jdkHome")
+                }
+            }
+
+            return this
+        }
+
     }
 }
